@@ -19,6 +19,7 @@ class Network(object):
     validation_k = 5
     activation = sigmoid
     act_prime = sigmoid_prime
+    shuffle = True
 
     def train(
         self,
@@ -43,7 +44,9 @@ class Network(object):
             acc_avg = 0.0
             start_time = time.time()
 
-            training_data, training_class = shuffle(training_data, training_class)
+            if self.shuffle:
+                training_data, training_class = shuffle(training_data, training_class)
+
             mini_batches = [
                 (
                     training_data[:, k : k + mini_batch_size],
@@ -52,7 +55,7 @@ class Network(object):
                 for k in range(0, n, mini_batch_size)
             ]
 
-            for mini_batch in mini_batches:
+            for idx, mini_batch in enumerate(mini_batches):
                 data = mini_batch[0]
                 truths = mini_batch[1]
                 Y, Zs, As = self.forward_pass(data)
@@ -63,31 +66,35 @@ class Network(object):
                     eta_current = self.eta * np.exp(-self.eta_decay * i)
 
                 loss = cross_entropy(truths, Y)
-                loss_reg = 0.0
 
-                if self.lamda:
-                    loss_reg = self.regularization_loss()
-
-                loss_avg += loss + loss_reg
+                loss_avg += loss
                 acc = self.accuracy(truths, Y)
                 acc_avg += acc
                 i += 1
+                print(f"Batch {idx}/{len(mini_batches)}...", end="\r")
 
             loss_norm = loss_avg / len(mini_batches)
             acc_norm = acc_avg / len(mini_batches)
+            losses.append(loss_norm)
+            accuracies.append(acc_norm)
 
             if j % self.validation_k == 0:
                 val_loss, val_acc = self.eval_network(val_data, val_class)
                 val_losses.append(val_loss)
                 val_accuracies.append(val_acc)
-
-            losses.append(loss_norm)
-            accuracies.append(acc_norm)
-            print(f"[{j}] Loss: {loss_norm:.4f} Accuracy: {acc_norm:.4f} t: {time.time() - start_time:.2f}s", end="\r")
+                print(
+                    f"[{j}] Loss: {loss_norm:.4f} Accuracy: {acc_norm:.4f} Val. Loss: {val_loss:.4f} Val. Acc: {val_acc:.4f} t: {time.time() - start_time:.2f}s",
+                    end="\r\n\r",
+                )
+            else:
+                print(
+                    f"[{j}] Loss: {loss_norm:.4f} Accuracy: {acc_norm:.4f} t: {time.time() - start_time:.2f}s",
+                    end="\r\n\r",
+                )
 
         return losses, accuracies, val_losses, val_accuracies
 
-    def update_network(self, gw, gb, rw, eta):        
+    def update_network(self, gw, gb, rw, eta):
         if self.optimizer == "sgd":
             for i in range(len(self.weights)):
                 self.weights[i] -= eta * (gw[i] + rw[i])
@@ -97,14 +104,14 @@ class Network(object):
             b2 = self.beta_2
             e = self.epsilon
             for i in range(len(self.weights)):
-                self.mw[i] = b1 * self.mw[i] + (1 - b1) * gw[i]
-                self.vw[i] = b2 * self.vw[i] + (1 - b2) * np.square(gw[i])
+                self.w_momentums[i] = b1 * self.w_momentums[i] + (1 - b1) * gw[i]
+                self.w_cache[i] = b2 * self.w_cache[i] + (1 - b2) * np.square(gw[i])
 
-                self.mb[i] = b1 * self.mb[i] + (1 - b1) * gb[i]
-                self.vb[i] = b2 * self.vb[i] + (1 - b2) * np.square(gb[i])
+                self.b_momentums[i] = b1 * self.b_momentums[i] + (1 - b1) * gb[i]
+                self.b_cache[i] = b2 * self.b_cache[i] + (1 - b2) * np.square(gb[i])
 
-                aw = self.mw[i] / (np.sqrt(self.vw[i]) + e)
-                ab = self.mb[i] / (np.sqrt(self.vb[i]) + e)
+                aw = self.w_momentums[i] / (np.sqrt(self.w_cache[i]) + e)
+                ab = self.b_momentums[i] / (np.sqrt(self.b_cache[i]) + e)
 
                 self.weights[i] -= eta * (aw + rw[i])
                 self.biases[i] -= eta * ab
@@ -149,20 +156,12 @@ class Network(object):
             if i == n_layers - 1:
                 d = softmax_dLdZ(output, target)
             else:
-                d = np.dot(np.transpose(self.weights[i + 1]), d) * self.act_prime(
-                    Zs[i]
-                )
+                d = np.dot(np.transpose(self.weights[i + 1]), d) * self.act_prime(Zs[i])
             gw[i] = np.dot(d, np.transpose(activations[i])) / batch_len
             gb[i] = np.sum(d, axis=1, keepdims=True) / batch_len
             if self.lamda:
                 rw[i] = (self.lamda / self.input_size) * self.weights[i]
         return gw, gb, rw
-
-    def regularization_loss(self):
-        weight_sum = 0.0
-        for layer in self.weights:
-            weight_sum += np.sum(np.square(layer))
-        return (self.lamda / (2 * self.input_size)) * weight_sum
 
     def accuracy(self, truths, predictions):
         if len(truths.shape) == 2:
@@ -210,17 +209,17 @@ class Network(object):
         else:
             raise TypeError(f"Invalid layer type: {type}")
 
-    def set(self, property: str, val: Union[float, int, dict]) -> None:
+    def set(self, property: str, val: Union[float, int, dict, bool]) -> None:
         if property == "optimizer":
             self.optimizer = val["type"]
             if self.optimizer == "adam":
                 self.epsilon = val["epsilon"]
                 self.beta_1 = val["beta_1"]
                 self.beta_2 = val["beta_2"]
-                self.mw = [np.zeros_like(x) for x in self.weights]
-                self.vw = [np.zeros_like(x) for x in self.weights]
-                self.mb = [np.zeros_like(x) for x in self.biases]
-                self.vb = [np.zeros_like(x) for x in self.biases]
+                self.w_momentums = [np.zeros_like(x) for x in self.weights]
+                self.w_cache = [np.zeros_like(x) for x in self.weights]
+                self.b_momentums = [np.zeros_like(x) for x in self.biases]
+                self.b_cache = [np.zeros_like(x) for x in self.biases]
 
         elif property == "learning_rate":
             self.eta = val
@@ -234,6 +233,9 @@ class Network(object):
         elif property == "activation":
             self.activation = val["activation"]
             self.act_prime = val["act_prime"]
-        
+
         elif property == "lambda":
             self.lamda = val
+
+        elif property == "shuffle":
+            self.shuffle = val

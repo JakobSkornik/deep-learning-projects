@@ -82,3 +82,12 @@ def compare_models(
     plt.xlabel("Epoch")
     plt.legend([c1, c2, f"{c1} validation", f"{c2} validation"], loc="upper right")
     plt.show()
+
+
+def save_model(name: str, obj) -> None:
+    with open(f"data/MODEL_{name}.pckl", "wb") as f:
+        pickle.dump(obj, f)
+
+def load_model(name: str):
+    with open(f"data/{name}.pckl", "rb") as f:
+        return pickle.load(f)

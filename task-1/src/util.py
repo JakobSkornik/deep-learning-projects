@@ -1,5 +1,6 @@
 import pickle
 import numpy as np
+from PIL import Image
 import matplotlib.pyplot as plt
 
 
@@ -59,4 +60,15 @@ def plot_model(acc: list, loss: list, val_acc: list, val_loss: list, k: int) -> 
     plt.ylabel("Loss")
     plt.xlabel("Epoch")
     plt.legend(["Loss", "Validation Loss"], loc="upper right")
+    plt.show()
+
+def compare_models(vals1: list, vals2: list, v_vals1: list, v_vals2: list, t: str, y_lab: str, x_lab: str, c1: str, c2: str, k: int) -> None:
+    plt.plot(vals1)
+    plt.plot(vals2)
+    plt.plot(np.repeat(v_vals1, k))
+    plt.plot(np.repeat(v_vals2, k))
+    plt.title(t)
+    plt.ylabel(y_lab)
+    plt.xlabel(x_lab)
+    plt.legend([c1, c2, f"{c1} validation", f"{c2} validation"], loc="upper right")
     plt.show()

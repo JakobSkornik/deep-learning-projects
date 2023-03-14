@@ -1,52 +1,24 @@
-import random
-from typing import Union
-import pandas as pd
+import time
 import numpy as np
-import pickle
+from typing import Union
 
-
-class SGD_Params:
-    def __init__(self, eta: float, eta_decay: float = 0.0):
-        self.eta = eta
-        self.eta_decay = eta_decay
-
-
-class Adam_Params:
-    def __init__(
-        self,
-        eta: float = 0.001,
-        eta_decay: float = 0.00001,
-        epsilon: float = 1e-7,
-        beta_1: float = 0.9,
-        beta_2: float = 0.999,
-    ):
-        self.eta = eta
-        self.eta_decay = eta_decay
-        self.epsilon = epsilon
-        self.beta_1 = beta_1
-        self.beta_2 = beta_2
+from .activations import softmax, sigmoid, sigmoid_prime, softmax_dLdZ
+from .losses import cross_entropy
+from .util import shuffle
 
 
 class Network(object):
-    def __init__(
-        self,
-        sizes: list[int],
-        optimizer: str = "sgd",
-        params: Union[SGD_Params, Adam_Params] = SGD_Params(0.001, 0.00001),
-    ):
-        self.weights = [
-            ((2 / sizes[i - 1]) ** 0.5) * np.random.randn(sizes[i], sizes[i - 1])
-            for i in range(1, len(sizes))
-        ]
-        self.biases = [np.zeros((x, 1)) for x in sizes[1:]]
-        self.optimizer = optimizer
-        self.params = params
-
-        if self.optimizer == "adam":
-            self.mw = [np.zeros_like(x) for x in self.weights]
-            self.vw = [np.zeros_like(x) for x in self.weights]
-            self.mb = [np.zeros_like(x) for x in self.biases]
-            self.vb = [np.zeros_like(x) for x in self.biases]
+    weights = []
+    biases = []
+    eta = 0.001
+    eta_decay = None
+    lamda = None
+    input_size = 0
+    num_hidden_layers = 0
+    optimizer = "sgd"
+    validation_k = 5
+    activation = sigmoid
+    act_prime = sigmoid_prime
 
     def train(
         self,
@@ -55,17 +27,22 @@ class Network(object):
         val_data: np.ndarray,
         val_class: np.ndarray,
         epochs: int,
-        mini_batch_size: int,
+        mini_batch_size: int = 16,
     ):
         i = 0
-        eta_current = self.params.eta
+        eta_current = self.eta
         n = training_data.shape[1]
 
         losses = []
         accuracies = []
+        val_losses = []
+        val_accuracies = []
 
         for j in range(epochs):
             loss_avg = 0.0
+            acc_avg = 0.0
+            start_time = time.time()
+
             training_data, training_class = shuffle(training_data, training_class)
             mini_batches = [
                 (
@@ -76,71 +53,60 @@ class Network(object):
             ]
 
             for mini_batch in mini_batches:
-                Y, Zs, As = self.forward_pass(mini_batch[0])
-                gw, gb = self.backward_pass(Y, mini_batch[1], Zs, As)
-                self.update_network(gw, gb, eta_current)
+                data = mini_batch[0]
+                truths = mini_batch[1]
+                Y, Zs, As = self.forward_pass(data)
+                gw, gb, rw = self.backward_pass(Y, truths, Zs, As)
+                self.update_network(gw, gb, rw, eta_current)
 
-                if self.params.eta_decay:
-                    eta_current = self.params.eta * np.exp(-self.params.eta_decay * i)
-                else:
-                    eta_current = self.params.eta
+                if self.eta_decay:
+                    eta_current = self.eta * np.exp(-self.eta_decay * i)
+
+                loss = cross_entropy(truths, Y)
+                loss_reg = 0.0
+
+                if self.lamda:
+                    loss_reg = self.regularization_loss()
+
+                loss_avg += loss + loss_reg
+                acc = self.accuracy(truths, Y)
+                acc_avg += acc
                 i += 1
 
-                loss = cross_entropy(mini_batch[1], Y)
-                loss_avg += loss
+            loss_norm = loss_avg / len(mini_batches)
+            acc_norm = acc_avg / len(mini_batches)
 
-            if j % 1 == 0:
-                loss, acc = self.eval_network(val_data, val_class)
-                losses.append(loss)
-                accuracies.append(acc)
-                print(
-                    f"Epoch {j} | Loss: {loss:.4f} | Eta: {eta_current:.8f} | Acc: {acc:.4f}",
-                    end="\n\r",
-                )
-            else:
-                print(
-                    f"Epoch {j} | Loss: {loss_avg / len(mini_batches):.8f} | Eta: {eta_current:.4f}",
-                    end="\r",
-                )
+            if j % self.validation_k == 0:
+                val_loss, val_acc = self.eval_network(val_data, val_class)
+                val_losses.append(val_loss)
+                val_accuracies.append(val_acc)
 
-        return losses, accuracies
+            losses.append(loss_norm)
+            accuracies.append(acc_norm)
+            print(f"[{j}] Loss: {loss_norm:.4f} Accuracy: {acc_norm:.4f} t: {time.time() - start_time:.2f}s", end="\r")
 
-    def eval_network(self, validation_data, validation_class):
-        n = validation_data.shape[1]
-        loss_avg = 0.0
-        tp = 0.0
-        for i in range(validation_data.shape[1]):
-            example = np.expand_dims(validation_data[:, i], -1)
-            example_class = np.expand_dims(validation_class[:, i], -1)
-            example_class_num = np.argmax(validation_class[:, i], axis=0)
-            output, Zs, activations = self.forward_pass(example)
-            output_num = np.argmax(output, axis=0)[0]
-            tp += int(example_class_num == output_num)
+        return losses, accuracies, val_losses, val_accuracies
 
-            loss = cross_entropy(example_class, output)
-            loss_avg += loss
-        return loss_avg / n, tp / n
-
-    def update_network(self, gw, gb, eta):
+    def update_network(self, gw, gb, rw, eta):        
         if self.optimizer == "sgd":
             for i in range(len(self.weights)):
-                self.weights[i] -= eta * gw[i]
+                self.weights[i] -= eta * (gw[i] + rw[i])
                 self.biases[i] -= eta * gb[i]
         elif self.optimizer == "adam":
-            b1 = self.params.beta_1
-            b2 = self.params.beta_2
-            e = self.params.epsilon
+            b1 = self.beta_1
+            b2 = self.beta_2
+            e = self.epsilon
             for i in range(len(self.weights)):
                 self.mw[i] = b1 * self.mw[i] + (1 - b1) * gw[i]
                 self.vw[i] = b2 * self.vw[i] + (1 - b2) * np.square(gw[i])
-                
+
                 self.mb[i] = b1 * self.mb[i] + (1 - b1) * gb[i]
                 self.vb[i] = b2 * self.vb[i] + (1 - b2) * np.square(gb[i])
 
                 aw = self.mw[i] / (np.sqrt(self.vw[i]) + e)
                 ab = self.mb[i] / (np.sqrt(self.vb[i]) + e)
 
-                self.weights[i] -= eta * aw
+                self.weights[i] -= eta * (aw + rw[i])
                 self.biases[i] -= eta * ab
         else:
             raise ValueError("Unknown optimizer:" + self.optimizer)
@@ -157,7 +123,7 @@ class Network(object):
             if i == output_layer_idx:
                 a_i = softmax(z_i)
             else:
-                a_i = sigmoid(z_i)
+                a_i = self.activation(z_i)
 
             Zs.append(z_i)
             activations.append(a_i)
@@ -175,91 +141,99 @@ class Network(object):
         batch_len = target.shape[1]
         n_layers = len(self.weights)
 
-        gw = [np.zeros(w.shape) for w in self.weights]
-        gb = [np.zeros(b.shape) for b in self.biases]
+        gw = [np.zeros(x.shape) for x in self.weights]
+        rw = [np.zeros(x.shape) for x in self.weights]
+        gb = [np.zeros(x.shape) for x in self.biases]
 
         for i in reversed(range(n_layers)):
             if i == n_layers - 1:
                 d = softmax_dLdZ(output, target)
             else:
-                d = np.dot(np.transpose(self.weights[i + 1]), d) * sigmoid_prime(Zs[i])
+                d = np.dot(np.transpose(self.weights[i + 1]), d) * self.act_prime(
+                    Zs[i]
+                )
             gw[i] = np.dot(d, np.transpose(activations[i])) / batch_len
             gb[i] = np.sum(d, axis=1, keepdims=True) / batch_len
+            if self.lamda:
+                rw[i] = (self.lamda / self.input_size) * self.weights[i]
+        return gw, gb, rw
 
-        return gw, gb
+    def regularization_loss(self):
+        weight_sum = 0.0
+        for layer in self.weights:
+            weight_sum += np.sum(np.square(layer))
+        return (self.lamda / (2 * self.input_size)) * weight_sum
 
+    def accuracy(self, truths, predictions):
+        if len(truths.shape) == 2:
+            predictions = np.argmax(predictions, axis=0)
+            truths = np.argmax(truths, axis=0)
+        return np.sum(predictions == truths) / len(truths)
 
-def softmax(Z: np.ndarray):
-    expZ = np.exp(Z - np.max(Z))
-    return expZ / expZ.sum(axis=0, keepdims=True)
+    def eval_network(self, validation_data, validation_class):
+        n = validation_data.shape[1]
+        loss_avg = 0.0
+        tp = 0.0
+        for i in range(validation_data.shape[1]):
+            example = np.expand_dims(validation_data[:, i], -1)
+            example_class = np.expand_dims(validation_class[:, i], -1)
+            example_class_num = np.argmax(validation_class[:, i], axis=0)
+            output, Zs, activations = self.forward_pass(example)
+            output_num = np.argmax(output, axis=0)[0]
+            tp += int(example_class_num == output_num)
 
+            loss = cross_entropy(example_class, output)
+            loss_avg += loss
+        return loss_avg / n, tp / n
 
-def softmax_dLdZ(output, target):
-    return output - target
+    def add_layer(self, neurons: int = 10, type: str = "hidden") -> None:
+        if type == "input":
+            self.input_size = neurons
+        elif type == "hidden":
+            if len(self.weights) == 0:
+                prev_size = self.input_size
+            else:
+                prev_size = len(self.weights[-1])
+            self.weights.append(
+                ((2 / prev_size) ** 0.5) * np.random.randn(neurons, prev_size)
+            )
+            self.biases.append(np.zeros((neurons, 1)))
+        elif type == "output":
+            if len(self.weights) == 0:
+                raise TypeError("Missing hidden layers.")
+            else:
+                prev_size = len(self.weights[-1])
+                self.weights.append(
+                    ((2 / prev_size) ** 0.5) * np.random.randn(neurons, prev_size)
+                )
+                self.biases.append(np.zeros((neurons, 1)))
+        else:
+            raise TypeError(f"Invalid layer type: {type}")
 
+    def set(self, property: str, val: Union[float, int, dict]) -> None:
+        if property == "optimizer":
+            self.optimizer = val["type"]
+            if self.optimizer == "adam":
+                self.epsilon = val["epsilon"]
+                self.beta_1 = val["beta_1"]
+                self.beta_2 = val["beta_2"]
+                self.mw = [np.zeros_like(x) for x in self.weights]
+                self.vw = [np.zeros_like(x) for x in self.weights]
+                self.mb = [np.zeros_like(x) for x in self.biases]
+                self.vb = [np.zeros_like(x) for x in self.biases]
 
-def cross_entropy(y_true, y_pred, epsilon=1e-12):
-    targets = y_true.transpose()
-    predictions = y_pred.transpose()
-    predictions = np.clip(predictions, epsilon, 1.0 - epsilon)
-    N = predictions.shape[0]
-    ce = -np.sum(targets * np.log(predictions + 1e-9)) / N
-    return ce
+        elif property == "learning_rate":
+            self.eta = val
 
+        elif property == "decay":
+            self.eta_decay = val
 
-def relu(z: np.ndarray):
-    return np.maximum(0, z)
+        elif property == "validation_k":
+            self.validation_k = val
 
-
-def relu_dLdz(z):
-    z[z < 0] = 0
-    return z
-
-
-def sigmoid(z: np.ndarray):
-    return 1.0 / (1.0 + np.exp(-z))
-
-
-def sigmoid_prime(z):
-    return sigmoid(z) * (1 - sigmoid(z))
-
-
-def unpickle(file):
-    with open(file, "rb") as fo:
-        return pickle.load(fo, encoding="bytes")
-
-
-def load_data_cifar(train_file: str, test_file: str):
-    train_dict = unpickle(train_file)
-    test_dict = unpickle(test_file)
-    train_data = np.array(train_dict["data"]) / 255.0
-    train_class = np.array(train_dict["labels"])
-    train_class_one_hot = np.zeros((train_data.shape[0], 10))
-    train_class_one_hot[np.arange(train_class.shape[0]), train_class] = 1.0
-    test_data = np.array(test_dict["data"]) / 255.0
-    test_class = np.array(test_dict["labels"])
-    test_class_one_hot = np.zeros((test_class.shape[0], 10))
-    test_class_one_hot[np.arange(test_class.shape[0]), test_class] = 1.0
-    return (
-        train_data.transpose(),
-        train_class_one_hot.transpose(),
-        test_data.transpose(),
-        test_class_one_hot.transpose(),
-    )
-
-
-def validation_split(
-    dataset: np.ndarray, ground_truths: np.ndarray, pct: float
-) -> tuple:
-    val_size = int(len(dataset) * pct)
-    train_data = dataset[..., val_size:]
-    train_class = ground_truths[..., val_size:]
-    val_data = dataset[..., :val_size]
-    val_class = ground_truths[..., :val_size]
-    return train_data, train_class, val_data, val_class
-
-
-def shuffle(dataset: np.ndarray, truths: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    idxs = np.arange(dataset.shape[1])
-    np.random.shuffle(idxs)
-    return dataset[:, idxs], truths[:, idxs]
+        elif property == "activation":
+            self.activation = val["activation"]
+            self.act_prime = val["act_prime"]
+        
+        elif property == "lambda":
+            self.lamda = val

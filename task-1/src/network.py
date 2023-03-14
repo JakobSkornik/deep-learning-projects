@@ -71,7 +71,7 @@ class Network(object):
                 acc = self.accuracy(truths, Y)
                 acc_avg += acc
                 i += 1
-                print(f"Batch {idx}/{len(mini_batches)}...", end="\r")
+                # print(f"Batch {idx}/{len(mini_batches)}...", end="\r")
 
             loss_norm = loss_avg / len(mini_batches)
             acc_norm = acc_avg / len(mini_batches)
@@ -83,12 +83,12 @@ class Network(object):
                 val_losses.append(val_loss)
                 val_accuracies.append(val_acc)
                 print(
-                    f"[{j}] Loss: {loss_norm:.4f} Accuracy: {acc_norm:.4f} Val. Loss: {val_loss:.4f} Val. Acc: {val_acc:.4f} t: {time.time() - start_time:.2f}s",
+                    f"[{j}] L: {loss_norm:.4f} A: {acc_norm:.4f} VL: {val_loss:.4f} VA: {val_acc:.4f} t: {time.time() - start_time:.2f}s",
                     end="\r\n\r",
                 )
             else:
                 print(
-                    f"[{j}] Loss: {loss_norm:.4f} Accuracy: {acc_norm:.4f} t: {time.time() - start_time:.2f}s",
+                    f"[{j}] L: {loss_norm:.4f} A: {acc_norm:.4f} t: {time.time() - start_time:.2f}s",
                     end="\r\n\r",
                 )
 

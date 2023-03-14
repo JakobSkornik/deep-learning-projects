@@ -51,7 +51,7 @@ def plot_model(acc: list, loss: list, val_acc: list, val_loss: list, k: int) -> 
     plt.title("Accuracy and Validation Accuracy")
     plt.ylabel("Accuracy")
     plt.xlabel("Epoch")
-    plt.legend(["Accuracy", "Validation Accuracy"], loc="upper right")
+    plt.legend(["Accuracy", "Validation Accuracy"], loc="lower right")
     plt.show()
 
     plt.plot(loss)
@@ -75,18 +75,22 @@ def compare_models(
 ) -> None:
     plt.plot(vals1)
     plt.plot(vals2)
-    plt.plot(np.repeat(v_vals1, k))
-    plt.plot(np.repeat(v_vals2, k))
+    plt.plot(np.repeat(v_vals1, k), alpha=0.4)
+    plt.plot(np.repeat(v_vals2, k), alpha=0.4)
     plt.title(t)
     plt.ylabel(t)
     plt.xlabel("Epoch")
-    plt.legend([c1, c2, f"{c1} validation", f"{c2} validation"], loc="upper right")
+
+    loc = "upper right" if t == "Loss" else "lower right"
+
+    plt.legend([f"{c1} Train", f"{c2} Train", f"{c1} Validation", f"{c2} Validation"], loc=loc)
     plt.show()
 
 
 def save_model(name: str, obj) -> None:
-    with open(f"data/MODEL_{name}.pckl", "wb") as f:
+    with open(f"data/{name}.pckl", "wb") as f:
         pickle.dump(obj, f)
+
 
 def load_model(name: str):
     with open(f"data/{name}.pckl", "rb") as f:
